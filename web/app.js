@@ -60,6 +60,10 @@ let tsManifest = null;
 let tsData = new Map();
 let selectedYear = null;
 const DEFAULT_YEAR = 2025;
+// WorldPop interpolates between the c.2010 and c.2020 census rounds; later years are projected.
+const LAST_CENSUS_YEAR = 2020;
+
+const yearLabel = (year) => (year > LAST_CENSUS_YEAR ? `${year} (projected)` : `${year}`);
 
 const popNames = () => (manifest.populations || []).map((s) => s.name);
 
@@ -495,7 +499,7 @@ function updateYearUI() {
   const slider = el("year");
   slider.max = String(years.length - 1);
   slider.value = String(years.indexOf(selectedYear));
-  el("year-val").textContent = selectedYear;
+  el("year-val").textContent = yearLabel(selectedYear);
   el("year-min").textContent = years[0];
   el("year-max").textContent = years.at(-1);
 }
@@ -600,11 +604,17 @@ function clearSearch() {
 }
 
 function downloadGeoJSON() {
-  const features = currentRows.map((d) => ({
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [h3.cellToBoundary(d.h3, true)] },
-    properties: d,
-  }));
+  const years = tsManifest && tsData.size ? tsManifest.years : null;
+  const features = currentRows.map((d) => {
+    const properties = { ...d };
+    const series = years && tsData.get(d.h3);
+    if (series) years.forEach((year, i) => (properties[`pop_${year}`] = series[i]));
+    return {
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [h3.cellToBoundary(d.h3, true)] },
+      properties,
+    };
+  });
   const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features })], {
     type: "application/json",
   });
@@ -654,7 +664,7 @@ function wireUI() {
   });
   el("year").addEventListener("input", (e) => {
     selectedYear = tsManifest.years[Number(e.target.value)];
-    el("year-val").textContent = selectedYear;
+    el("year-val").textContent = yearLabel(selectedYear);
     if (currentRows.length) (render(currentRows), showStats(currentRows));
     renderSparkline();
   });
