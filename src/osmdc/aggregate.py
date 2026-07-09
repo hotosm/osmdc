@@ -320,8 +320,10 @@ def _compact_partitions(con: duckdb.DuckDBPyConnection, out_dir: Path) -> None:
         if len(shards) <= 1:
             continue
         compacted = out_dir / f"{partition.name}.compact.parquet"
+        # hive_partitioning=0 keeps compacted files from re-adding the h3_parent
+        # column, so every tile carries the same schema as the single-shard tiles.
         con.execute(
-            f"COPY (SELECT * FROM read_parquet('{partition}/*.parquet')) "
+            f"COPY (SELECT * FROM read_parquet('{partition}/*.parquet', hive_partitioning=0)) "
             f"TO '{compacted}' (FORMAT PARQUET, COMPRESSION zstd)"
         )
         for shard in shards:

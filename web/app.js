@@ -53,6 +53,8 @@ let map, overlay, db, manifest, currentRows = [];
 let gridVisible = true;
 let busy = false;
 let popSource = "kontur";
+let coverageCells = [];
+let loadedGeojson = null;
 
 const popNames = () => (manifest.populations || []).map((s) => s.name);
 
@@ -233,27 +235,35 @@ async function queryTiles(parents) {
     await db.registerFileBuffer(name, new Uint8Array(await response.arrayBuffer()));
     names.push(`'${name}'`);
   }
-  const result = await conn.query(`SELECT * FROM read_parquet([${names.join(",")}])`);
+  const sources = popNames();
+  const rows = [];
+  const reader = await conn.send(
+    `SELECT * FROM read_parquet([${names.join(",")}], union_by_name=true)`
+  );
+  for await (const batch of reader) {
+    for (let i = 0; i < batch.numRows; i++) rows.push(tileRow(batch.get(i).toJSON(), sources));
+  }
   await conn.close();
   for (let i = 0; i < names.length; i++) await db.dropFile(`tile_${i}.parquet`);
-  return result.toArray().map((r) => {
-    const o = r.toJSON();
-    const row = {
-      h3: o.h3,
-      bld_count: Number(o.bld_count),
-      bld_osm: Number(o.bld_osm),
-      osm_pct: o.osm_pct == null ? null : Number(o.osm_pct),
-      road_count: Number(o.road_count),
-      road_osm: o.road_osm == null ? 0 : Number(o.road_osm),
-      road_pct: o.road_pct == null ? null : Number(o.road_pct),
-      road_len_m: Number(o.road_len_m),
-    };
-    for (const name of popNames()) {
-      row[`population_${name}`] = o[`population_${name}`] == null ? 0 : Number(o[`population_${name}`]);
-      row[`gap_score_${name}`] = o[`gap_score_${name}`] == null ? 0 : Number(o[`gap_score_${name}`]);
-    }
-    return row;
-  });
+  return rows;
+}
+
+function tileRow(o, sources) {
+  const row = {
+    h3: o.h3,
+    bld_count: Number(o.bld_count),
+    bld_osm: Number(o.bld_osm),
+    osm_pct: o.osm_pct == null ? null : Number(o.osm_pct),
+    road_count: Number(o.road_count),
+    road_osm: o.road_osm == null ? 0 : Number(o.road_osm),
+    road_pct: o.road_pct == null ? null : Number(o.road_pct),
+    road_len_m: Number(o.road_len_m),
+  };
+  for (const name of sources) {
+    row[`population_${name}`] = o[`population_${name}`] == null ? 0 : Number(o[`population_${name}`]);
+    row[`gap_score_${name}`] = o[`gap_score_${name}`] == null ? 0 : Number(o[`gap_score_${name}`]);
+  }
+  return row;
 }
 
 const PERCENT_METRICS = new Set(["osm_pct", "road_pct"]);
@@ -278,6 +288,20 @@ function render(rows) {
   const hot = HOT_METRICS.has(el("metric").value);
   const popCol = colFor("population");
   const gapCol = colFor("gap_score");
+  const dataSet = new Set(rows.map((d) => d.h3));
+  const emptyCells = coverageCells.filter((h) => !dataSet.has(h));
+  const coverageLayer = new H3HexagonLayer({
+    id: "coverage",
+    data: emptyCells,
+    getHexagon: (d) => d,
+    extruded: false,
+    filled: true,
+    stroked: true,
+    getFillColor: [130, 130, 130, 18],
+    getLineColor: [130, 130, 130, 55],
+    lineWidthMinPixels: 0.5,
+    pickable: false,
+  });
   const layer = new H3HexagonLayer({
     id: "cells",
     data: rows,
@@ -298,7 +322,7 @@ function render(rows) {
     updateTriggers: { getFillColor: [el("metric").value, popSource, rows] },
   });
   overlay.setProps({
-    layers: [layer],
+    layers: [coverageLayer, layer],
     getTooltip: ({ object }) =>
       object && {
         html: `<b>${object.h3}</b><br/>buildings: ${object.bld_count} (${object.osm_pct ?? "-"}% in OSM)<br/>roads: ${(object.road_len_m / 1000).toFixed(2)} km${ROADS_ENABLED ? ` (${object.road_pct ?? "-"}% in OSM)` : ""}<br/>population: ${(object[popCol] ?? 0).toLocaleString()} (gap ${(object[gapCol] ?? 0).toLocaleString()})`,
@@ -359,9 +383,10 @@ async function process(geojson, fit = true, showAoi = true) {
         ? `Only Polygon and MultiPolygon are supported, not ${found}.`
         : "No polygon found in that file.");
     }
-    showAoi ? setAoi(polys) : clearAoi();
+    if (showAoi) setAoi(polys);
 
     const cells = coveredCells(polys, manifest.resolution);
+    coverageCells = showAoi ? [...cells] : [];
     const parents = new Set([...cells].map((c) => h3.cellToParent(c, manifest.partition_resolution)));
 
     status(`Querying ${parents.size} tile(s)...`);
@@ -370,13 +395,16 @@ async function process(geojson, fit = true, showAoi = true) {
 
     render(currentRows);
     if (currentRows.length === 0) {
+      el("stats").hidden = true;
+      el("download").disabled = true;
       if (fit) fitToPolys(polys);
-      return status("No H3 coverage here yet. The dashed AOI outline is shown.");
+      return status(`No mapped data in ${cells.size} covered cells. Coverage shown faint.`);
     }
     showStats(currentRows);
-    if (fit) fitTo(currentRows);
+    if (fit) coverageCells.length ? fitToPolys(polys) : fitTo(currentRows);
     el("download").disabled = false;
-    status(`${currentRows.length} cells in view.`);
+    const empty = cells.size - currentRows.length;
+    status(`${currentRows.length} cells with data${empty > 0 ? `, ${empty} empty` : ""}.`);
   } finally {
     setBusy(false);
   }
@@ -437,6 +465,9 @@ function clearSearch() {
   el("search-clear").classList.remove("show");
   searchHits = [];
   currentRows = [];
+  coverageCells = [];
+  loadedGeojson = null;
+  updateLoadedButton();
   overlay.setProps({ layers: [] });
   clearAoi();
   el("stats").hidden = true;
@@ -460,10 +491,18 @@ function downloadGeoJSON() {
   URL.revokeObjectURL(a.href);
 }
 
+function updateLoadedButton() {
+  el("sample").textContent = loadedGeojson ? "Assess loaded area" : "Try a sample area";
+}
+
 function readFile(file) {
   el("drop-text").textContent = file.name;
   const reader = new FileReader();
-  reader.onload = () => process(JSON.parse(reader.result));
+  reader.onload = () => {
+    loadedGeojson = JSON.parse(reader.result);
+    updateLoadedButton();
+    process(loadedGeojson);
+  };
   reader.readAsText(file);
 }
 
@@ -487,7 +526,11 @@ function wireUI() {
     if (currentRows.length) (render(currentRows), showStats(currentRows));
   });
   el("download").addEventListener("click", downloadGeoJSON);
-  el("sample").addEventListener("click", () => process(SAMPLE));
+  el("sample").addEventListener("click", () => {
+    if (!loadedGeojson) loadedGeojson = SAMPLE;
+    updateLoadedButton();
+    process(loadedGeojson);
+  });
   el("assess").addEventListener("click", assessView);
   el("toggle-esri").addEventListener("change", (e) => toggleSatellite(e.target.checked));
   el("toggle-grid").addEventListener("change", (e) => toggleGrid(e.target.checked));
