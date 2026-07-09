@@ -427,7 +427,7 @@ function assessView() {
       [b.getEast(), b.getNorth()], [b.getWest(), b.getNorth()], [b.getWest(), b.getSouth()],
     ]],
   };
-  return process(poly, false, false);
+  return process(poly, false, true);
 }
 
 let searchHits = [];
