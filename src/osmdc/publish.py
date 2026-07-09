@@ -7,9 +7,15 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 
-def publish_tiles(tiles_dir: Path, repo_id: str, token: str | None = None) -> str:
+def publish_tiles(
+    tiles_dir: Path,
+    repo_id: str,
+    token: str | None = None,
+    path_in_repo: str | None = None,
+) -> str:
     """Upload a tile directory (parquet shards + manifest) to a HF dataset repo.
 
+    path_in_repo places the tiles in a subfolder of the same repo (e.g. worldpop_ts).
     token defaults to the cached login or HF_TOKEN environment variable.
     Returns the dataset URL.
     """
@@ -19,8 +25,9 @@ def publish_tiles(tiles_dir: Path, repo_id: str, token: str | None = None) -> st
     api.create_repo(repo_id, repo_type="dataset", exist_ok=True)
     api.upload_folder(
         folder_path=str(tiles_dir),
+        path_in_repo=path_in_repo,
         repo_id=repo_id,
         repo_type="dataset",
-        commit_message="Update OSM completeness tiles",
+        commit_message=f"Update {path_in_repo or 'completeness'} tiles",
     )
     return f"https://huggingface.co/datasets/{repo_id}"

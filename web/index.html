@@ -31,16 +31,17 @@
       #panel { background: var(--panel); border-right: 1px solid var(--line); padding: 18px; overflow-y: auto; }
       #map-wrap { position: relative; height: 100%; }
       #map { position: absolute; inset: 0; }
-      .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-      .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
-      .brand-logo { height: 22px; width: auto; flex: none; }
-      h1 { font-size: 16px; margin: 0 0 2px; }
+      .header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+      .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .brand-logo { height: 30px; width: auto; flex: none; }
+      .brand-text { min-width: 0; }
+      h1 { font-size: 16px; margin: 0; }
       @media (max-width: 720px) {
         #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
         #panel { border-right: none; border-bottom: 1px solid var(--line); max-height: 46vh; }
         #map-wrap { min-height: 54vh; }
       }
-      .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+      .sub { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
       #drop {
         border: 1.5px dashed #cbd5e1; border-radius: 10px; padding: 22px 12px; text-align: center;
         color: var(--muted); font-size: 13px; cursor: pointer; transition: 0.15s;
@@ -90,6 +91,11 @@
       .modal p { margin: 6px 0; color: #475569; }
       .modal ul { margin: 6px 0; padding-left: 20px; color: #475569; }
       #popsrc-row[hidden] { display: none; }
+      #year-row[hidden] { display: none; }
+      #year { width: 100%; accent-color: var(--accent); margin: 6px 0 0; }
+      .year-ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 2px; }
+      #spark { margin-top: 8px; line-height: 0; }
+      .spark-delta { font-size: 11px; color: var(--muted); margin-top: 4px; }
       .data-note { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
       .data-note-head { text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
       .data-note div.data-note-head { margin-bottom: 6px; }
@@ -111,11 +117,13 @@
         <div class="header-row">
           <div class="brand">
             <img class="brand-logo" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDgwIDQ4Ij48ZyBmaWxsPSIjRDczRjNGIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNy4wMjY1NiwyMC43NzQ5NiBDMzcuMDI2NTYsMjAuMjkwOTYgMzcuMTI5NzYsMTkuODU4OTYgMzcuMzM2MTYsMTkuNDg2MTYgQzM3LjU0MDk2LDE5LjExMTc2IDM3LjgxMjk2LDE4LjgwNjk2IDM4LjE1MDU2LDE4LjU2Mzc2IEMzOC40ODY1NiwxOC4zMjEzNiAzOC44NjQ5NiwxOC4xMzczNiAzOS4yODU3NiwxOC4wMTMzNiBDMzkuNzA0OTYsMTcuODkwMTYgNDAuMTI3MzYsMTcuODI3NzYgNDAuNTUzNzYsMTcuODI3NzYgQzQwLjk3ODU2LDE3LjgyNzc2IDQxLjQwMjU2LDE3Ljg5MDE2IDQxLjgyMzM2LDE4LjAxMzM2IEM0Mi4yNDE3NiwxOC4xMzczNiA0Mi42MjAxNiwxOC4zMjEzNiA0Mi45NTYxNiwxOC41NjM3NiBDNDMuMjk0NTYsMTguODA2OTYgNDMuNTY1NzYsMTkuMTExNzYgNDMuNzcyMTYsMTkuNDg2MTYgQzQzLjk3ODU2LDE5Ljg1ODk2IDQ0LjA4MDk2LDIwLjI5MDk2IDQ0LjA4MDk2LDIwLjc3NDk2IEw0NC4wODA5NiwyNy4xNDY5NiBDNDQuMDgwOTYsMjcuNjQxMzYgNDMuOTc4NTYsMjguMDc0OTYgNDMuNzcyMTYsMjguNDQyMTYgQzQzLjU2NTc2LDI4LjgxMDk2IDQzLjI5NDU2LDI5LjExNDE2IDQyLjk1NjE2LDI5LjM1NzM2IEM0Mi42MjAxNiwyOS42MDEzNiA0Mi4yNDE3NiwyOS43ODYxNiA0MS44MjMzNiwyOS45MDg1NiBDNDEuNDAyNTYsMzAuMDMxNzYgNDAuOTc4NTYsMzAuMDkzMzYgNDAuNTUzNzYsMzAuMDkzMzYgQzQwLjEyNzM2LDMwLjA5MzM2IDM5LjcwNDk2LDMwLjAzMTc2IDM5LjI4NTc2LDI5LjkwODU2IEMzOC44NjQ5NiwyOS43ODYxNiAzOC40ODY1NiwyOS42MDEzNiAzOC4xNTA1NiwyOS4zNTczNiBDMzcuODEyOTYsMjkuMTE0MTYgMzcuNTQwOTYsMjguODEwOTYgMzcuMzM2MTYsMjguNDQyMTYgQzM3LjEyOTc2LDI4LjA3NDk2IDM3LjAyNjU2LDI3LjY0MTM2IDM3LjAyNjU2LDI3LjE0Njk2IEwzNy4wMjY1NiwyMC43NzQ5NiBaIE0zOS4wNTEzNiwyNy4xNTAxNiBDMzkuMDUxMzYsMjcuNTY1MzYgMzkuMjgyNTYsMjcuODc0OTYgMzkuNTY1NzYsMjguMDcxNzYgQzM5Ljg0NzM2LDI4LjI3MDE2IDQwLjE4MDk2LDI4LjM3NDk2IDQwLjU2NTc2LDI4LjM3NDk2IEM0MC45NDg5NiwyOC4zNzQ5NiA0MS4yODQxNiwyOC4yNzAxNiA0MS41NjY1NiwyOC4wNzE3NiBDNDEuODQ3MzYsMjcuODc0OTYgNDIuMDA4MTYsMjcuNTY1MzYgNDIuMDA4MTYsMjcuMTUwMTYgTDQyLjAwODE2LDIwLjc3ODE2IEM0Mi4wMDgxNiwyMC4zNjEzNiA0MS44NDczNiwyMC4wNTI1NiA0MS41NjY1NiwxOS44NTU3NiBDNDEuMjg0MTYsMTkuNjU4MTYgNDAuOTQ4OTYsMTkuNTI1MzYgNDAuNTY1NzYsMTkuNTI1MzYgQzQwLjE4MDk2LDE5LjUyNTM2IDM5Ljg0NzM2LDE5LjY1ODE2IDM5LjU2NTc2LDE5Ljg1NTc2IEMzOS4yODI1NiwyMC4wNTI1NiAzOS4wNTEzNiwyMC4zNjEzNiAzOS4wNTEzNiwyMC43NzgxNiBMMzkuMDUxMzYsMjcuMTUwMTYgWiIvPjxwb2x5Z29uIHBvaW50cz0iMzMuMzc5IDE3LjgxNSAzMy4zNzkgMjIuOTkgMzAuMTUyIDIyLjk5IDMwLjE1MiAxNy44MTUgMjguMzg3IDE3LjgxNSAyOC4zODcgMzAuMSAzMC4xNTIgMzAuMSAzMC4xNTIgMjQuOTIzIDMzLjM3OSAyNC45MjMgMzMuMzc5IDMwLjEgMzUuMjc4IDMwLjEgMzUuMjc4IDE3LjgxNSIvPjxwb2x5Z29uIHBvaW50cz0iNTIuNDMxIDE3LjgxNSA0NS40MjYgMTcuODE1IDQ1LjQyNiAxOS42MjIgNDguMDE1IDE5LjYyMiA0Ny45ODUgMzAuMSA0OS44NDcgMzAuMSA0OS44NDcgMTkuNjIyIDUyLjQzMSAxOS42MjIiLz48cGF0aCBkPSJNNjUuNDIzNDQsMjguNzY2OCBMNzkuNjc5NDQsMjguNzY2OCBMNzEuMTU1NDQsMTkuMTY4NCBMNjIuNjY5MDQsOS41NyBMNTQuMTgxMDQsMC4wMDA0MDAwMDAwMDEgTDExLjUzOTQ0LDAuMDAwNDAwMDAwMDAxIEwyMC4wMjU4NCw5LjU3IEw1LjczNzg0LDkuNTcgTDE0LjIyNTg0LDE5LjE2ODQgTDE0LjI5MTQ0LDE5LjIzMzIgTDAuMDAwMjM5OTk5OTk5LDE5LjIzMzIgTDguNTIxODQsMjguODMxNiBMMTcuMDEzMDQsMzguNDMgTDI1LjUwMDI0LDQ4LjAwMDQgTDY4LjE0MTg0LDQ4LjAwMDQgTDU5LjY1MDY0LDM4LjQzIEw1OS41ODgyNCwzOC4zMzY0IEw3My44Nzg2NCwzOC4zMzY0IEw2NS40MjM0NCwyOC43NjY4IFogTTM5LjgzOTQ0LDM5Ljk0OTIgQzMwLjMxODY0LDM5Ljk0OTIgMjIuNjAxMDQsMzIuODA4NCAyMi42MDEwNCwyNC4wMDEyIEMyMi42MDEwNCwxNS4xOTA4IDMwLjMxODY0LDguMDUgMzkuODM5NDQsOC4wNSBDNDkuMzYxMDQsOC4wNSA1Ny4wNzk0NCwxNS4xOTA4IDU3LjA3OTQ0LDI0LjAwMTIgQzU3LjA3OTQ0LDMyLjgwODQgNDkuMzYxMDQsMzkuOTQ5MiAzOS44Mzk0NCwzOS45NDkyIFoiLz48L2c+PC9zdmc+" alt="HOT" />
-            <h1>OSM Data Completeness</h1>
+            <div class="brand-text">
+              <h1>OSM Data Completeness</h1>
+              <div class="sub">Helper tool to assess data gaps</div>
+            </div>
           </div>
           <button id="info-btn" title="How it's calculated" aria-label="How it's calculated">i</button>
         </div>
-        <div class="sub">Helper tool to assess data gaps</div>
 
         <div id="search-box">
           <input id="search" type="text" placeholder="Search a place" autocomplete="off" />
@@ -145,6 +153,14 @@
         <div id="popsrc-row" hidden>
           <label for="popsrc">Population source</label>
           <select id="popsrc"></select>
+        </div>
+
+        <div id="year-row" hidden>
+          <label for="year">Year <span id="year-val"></span></label>
+          <input id="year" type="range" min="0" max="0" step="1" value="0" />
+          <div class="year-ends"><span id="year-min"></span><span id="year-max"></span></div>
+          <div id="spark"></div>
+          <div id="spark-delta" class="spark-delta"></div>
         </div>
 
         <div id="legend">

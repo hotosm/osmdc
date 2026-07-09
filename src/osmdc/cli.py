@@ -9,7 +9,7 @@ from osmdc import config
 from osmdc.aggregate import BoundingBox, aggregate_tile, connect, merge_chunks, run_global
 from osmdc.population import kontur_to_parquet
 from osmdc.publish import publish_tiles
-from osmdc.worldpop import worldpop_to_parquet
+from osmdc.worldpop import worldpop_timeseries_tiles, worldpop_to_parquet
 
 
 def _add_throttle_args(parser: argparse.ArgumentParser) -> None:
@@ -102,8 +102,11 @@ def publish_main() -> None:
     parser.add_argument("--tiles", type=Path, required=True, help="merged tile directory")
     parser.add_argument("--repo", required=True, help="HF dataset id, e.g. user/name")
     parser.add_argument("--token", default=None, help="HF token (defaults to cached login)")
+    parser.add_argument(
+        "--path-in-repo", default=None, help="subfolder in the repo, e.g. worldpop_ts"
+    )
     args = parser.parse_args()
-    url = publish_tiles(args.tiles, args.repo, args.token)
+    url = publish_tiles(args.tiles, args.repo, args.token, args.path_in_repo)
     print(f"published to {url}")
 
 
@@ -134,6 +137,24 @@ def worldpop_main() -> None:
     con = connect(args.threads, args.memory_limit, args.temp_dir)
     cells, total = worldpop_to_parquet(con, args.tif_dir, args.out, args.year)
     print(f"wrote {cells} cells, total population {total:,.0f} to {args.out}")
+
+
+def worldpop_ts_main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="osmdc-worldpop-ts",
+        description="Build wide (h3, pop_<year>...) WorldPop time-series tiles",
+    )
+    parser.add_argument("--tif-dir", required=True, help="directory of WorldPop GeoTIFFs")
+    parser.add_argument("--out", type=Path, required=True, help="output tile directory")
+    parser.add_argument("--scratch-dir", type=Path, required=True, help="per-year scratch parquet")
+    parser.add_argument("--year-min", type=int, default=2015)
+    parser.add_argument("--year-max", type=int, default=2030)
+    _add_throttle_args(parser)
+    args = parser.parse_args()
+    con = connect(args.threads, args.memory_limit, args.temp_dir)
+    years = list(range(args.year_min, args.year_max + 1))
+    present, cells = worldpop_timeseries_tiles(con, args.tif_dir, args.out, args.scratch_dir, years)
+    print(f"wrote {cells} cells for years {present[0]}-{present[-1]} to {args.out}")
 
 
 def planet_main() -> None:

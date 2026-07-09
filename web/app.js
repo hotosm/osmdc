@@ -55,6 +55,11 @@ let busy = false;
 let popSource = "kontur";
 let coverageCells = [];
 let loadedGeojson = null;
+let currentParents = new Set();
+let tsManifest = null;
+let tsData = new Map();
+let selectedYear = null;
+const DEFAULT_YEAR = 2025;
 
 const popNames = () => (manifest.populations || []).map((s) => s.name);
 
@@ -269,16 +274,75 @@ function tileRow(o, sources) {
 const PERCENT_METRICS = new Set(["osm_pct", "road_pct"]);
 const HOT_METRICS = new Set(["gap_score"]);
 
+async function ensureTsManifest() {
+  if (tsManifest !== null) return tsManifest;
+  const res = await fetch(new URL("worldpop_ts/manifest.json", DATA_BASE));
+  tsManifest = res.ok ? await res.json() : false;
+  return tsManifest;
+}
+
+async function fetchTs(parents) {
+  tsData = new Map();
+  if (!tsManifest || !tsManifest.years) return;
+  const conn = await db.connect();
+  const names = [];
+  for (const parent of parents) {
+    const rel = tsManifest.tiles[parent];
+    if (!rel) continue;
+    const response = await fetch(new URL(`worldpop_ts/${rel}`, DATA_BASE).href);
+    if (!response.ok) continue;
+    const name = `ts_${names.length}.parquet`;
+    await db.registerFileBuffer(name, new Uint8Array(await response.arrayBuffer()));
+    names.push(name);
+  }
+  if (names.length) {
+    const years = tsManifest.years;
+    const cols = years.map((y) => `pop_${y}`).join(", ");
+    const files = names.map((n) => `'${n}'`).join(",");
+    const reader = await conn.send(`SELECT h3, ${cols} FROM read_parquet([${files}], union_by_name=true)`);
+    for await (const batch of reader) {
+      for (let i = 0; i < batch.numRows; i++) {
+        const o = batch.get(i).toJSON();
+        tsData.set(o.h3, years.map((y) => (o[`pop_${y}`] == null ? 0 : Number(o[`pop_${y}`]))));
+      }
+    }
+  }
+  await conn.close();
+  for (const name of names) await db.dropFile(name);
+}
+
+function yearActive() {
+  return popSource === "worldpop" && tsManifest && tsData.size > 0 && selectedYear != null;
+}
+
+function popForYear(h3) {
+  const arr = tsData.get(h3);
+  const index = tsManifest ? tsManifest.years.indexOf(selectedYear) : -1;
+  return arr && index >= 0 ? arr[index] : null;
+}
+
+function popValue(d) {
+  if (yearActive()) {
+    const value = popForYear(d.h3);
+    if (value != null) return value;
+  }
+  return d[colFor("population")] ?? 0;
+}
+
 function metricValue(d) {
-  return d[colFor(el("metric").value)];
+  const metric = el("metric").value;
+  if (metric === "population" && yearActive()) {
+    const value = popForYear(d.h3);
+    if (value != null) return value;
+  }
+  return d[colFor(metric)];
 }
 
 function makeNormaliser(rows) {
   const metric = el("metric").value;
   if (PERCENT_METRICS.has(metric)) return (v) => (v == null ? null : v / 100);
-  const col = colFor(metric);
   let max = 0;
-  for (const d of rows) max = Math.max(max, d[col] || 0);
+  for (const d of rows) max = Math.max(max, metricValue(d) || 0);
   return (v) => (v == null || max === 0 ? null : v / max);
 }
 
@@ -286,7 +350,6 @@ function render(rows) {
   if (!gridVisible) return overlay.setProps({ layers: [] });
   const norm = makeNormaliser(rows);
   const hot = HOT_METRICS.has(el("metric").value);
-  const popCol = colFor("population");
   const gapCol = colFor("gap_score");
   const dataSet = new Set(rows.map((d) => d.h3));
   const emptyCells = coverageCells.filter((h) => !dataSet.has(h));
@@ -319,13 +382,13 @@ function render(rows) {
       if (hot) t = 1 - t;
       return [...ramp(t), 200];
     },
-    updateTriggers: { getFillColor: [el("metric").value, popSource, rows] },
+    updateTriggers: { getFillColor: [el("metric").value, popSource, selectedYear, rows] },
   });
   overlay.setProps({
     layers: [coverageLayer, layer],
     getTooltip: ({ object }) =>
       object && {
-        html: `<b>${object.h3}</b><br/>buildings: ${object.bld_count} (${object.osm_pct ?? "-"}% in OSM)<br/>roads: ${(object.road_len_m / 1000).toFixed(2)} km${ROADS_ENABLED ? ` (${object.road_pct ?? "-"}% in OSM)` : ""}<br/>population: ${(object[popCol] ?? 0).toLocaleString()} (gap ${(object[gapCol] ?? 0).toLocaleString()})`,
+        html: `<b>${object.h3}</b><br/>buildings: ${object.bld_count} (${object.osm_pct ?? "-"}% in OSM)<br/>roads: ${(object.road_len_m / 1000).toFixed(2)} km${ROADS_ENABLED ? ` (${object.road_pct ?? "-"}% in OSM)` : ""}<br/>population${yearActive() ? ` ${selectedYear}` : ""}: ${popValue(object).toLocaleString()} (gap ${(object[gapCol] ?? 0).toLocaleString()})`,
         style: {
           background: "#ffffff", color: "#1e293b", fontSize: "12px", padding: "6px",
           borderRadius: "4px", boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
@@ -335,7 +398,6 @@ function render(rows) {
 }
 
 function showStats(rows) {
-  const popCol = colFor("population");
   const gapCol = colFor("gap_score");
   let bld = 0, bldOsm = 0, road = 0, roadOsm = 0, km = 0, pop = 0, gap = 0;
   for (const d of rows) {
@@ -344,7 +406,7 @@ function showStats(rows) {
     road += d.road_count;
     roadOsm += d.road_osm;
     km += d.road_len_m / 1000;
-    pop += d[popCol] ?? 0;
+    pop += popValue(d);
     gap += d[gapCol] ?? 0;
   }
   el("s-cells").textContent = rows.length.toLocaleString();
@@ -388,19 +450,25 @@ async function process(geojson, fit = true, showAoi = true) {
     const cells = coveredCells(polys, manifest.resolution);
     coverageCells = showAoi ? [...cells] : [];
     const parents = new Set([...cells].map((c) => h3.cellToParent(c, manifest.partition_resolution)));
+    currentParents = parents;
 
     status(`Querying ${parents.size} tile(s)...`);
     const all = await queryTiles(parents);
     currentRows = all.filter((d) => cells.has(d.h3));
+    await loadTimeSeries(parents);
 
     render(currentRows);
     if (currentRows.length === 0) {
       el("stats").hidden = true;
       el("download").disabled = true;
+      updateYearUI();
+      renderSparkline();
       if (fit) fitToPolys(polys);
       return status(`No mapped data in ${cells.size} covered cells. Coverage shown faint.`);
     }
     showStats(currentRows);
+    updateYearUI();
+    renderSparkline();
     if (fit) coverageCells.length ? fitToPolys(polys) : fitTo(currentRows);
     el("download").disabled = false;
     const empty = cells.size - currentRows.length;
@@ -408,6 +476,58 @@ async function process(geojson, fit = true, showAoi = true) {
   } finally {
     setBusy(false);
   }
+}
+
+async function loadTimeSeries(parents) {
+  if (popSource !== "worldpop") return;
+  await ensureTsManifest();
+  await fetchTs(parents);
+}
+
+function updateYearUI() {
+  const years = tsManifest && tsManifest.years;
+  const on = popSource === "worldpop" && years && years.length > 0;
+  el("year-row").hidden = !on;
+  if (!on) return;
+  if (selectedYear == null || !years.includes(selectedYear)) {
+    selectedYear = years.includes(DEFAULT_YEAR) ? DEFAULT_YEAR : years.at(-1);
+  }
+  const slider = el("year");
+  slider.max = String(years.length - 1);
+  slider.value = String(years.indexOf(selectedYear));
+  el("year-val").textContent = selectedYear;
+  el("year-min").textContent = years[0];
+  el("year-max").textContent = years.at(-1);
+}
+
+function renderSparkline() {
+  const box = el("spark");
+  const caption = el("spark-delta");
+  if (!yearActive() || currentRows.length === 0) {
+    box.innerHTML = "";
+    caption.textContent = "";
+    return;
+  }
+  const years = tsManifest.years;
+  const totals = years.map((y, i) => currentRows.reduce((sum, d) => sum + (tsData.get(d.h3)?.[i] ?? 0), 0));
+  const width = 284, height = 44, pad = 5;
+  const min = Math.min(...totals), max = Math.max(...totals);
+  const xAt = (i) => pad + (width - 2 * pad) * (years.length < 2 ? 0.5 : i / (years.length - 1));
+  const yAt = (v) => height - pad - (height - 2 * pad) * (max === min ? 0.5 : (v - min) / (max - min));
+  const points = totals.map((v, i) => `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+  const si = years.indexOf(selectedYear);
+  const cx = xAt(si).toFixed(1), cy = yAt(totals[si]).toFixed(1);
+  box.innerHTML =
+    `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" ` +
+    `aria-label="Population ${years[0]} to ${years.at(-1)}">` +
+    `<line x1="${cx}" y1="${pad}" x2="${cx}" y2="${height - pad}" stroke="var(--line)" stroke-width="1"/>` +
+    `<polyline fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" ` +
+    `stroke-linecap="round" points="${points}"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="3.5" fill="var(--accent)"/></svg>`;
+  const base = totals[0] || 0, current = totals[si] || 0;
+  const pct = base ? Math.round(((current - base) / base) * 100) : 0;
+  caption.textContent =
+    `${Math.round(current).toLocaleString()} in ${selectedYear} · ${pct >= 0 ? "+" : ""}${pct}% since ${years[0]}`;
 }
 
 function boundsAreaKm2(bounds) {
@@ -467,7 +587,11 @@ function clearSearch() {
   currentRows = [];
   coverageCells = [];
   loadedGeojson = null;
+  currentParents = new Set();
+  tsData = new Map();
   updateLoadedButton();
+  updateYearUI();
+  renderSparkline();
   overlay.setProps({ layers: [] });
   clearAoi();
   el("stats").hidden = true;
@@ -520,10 +644,19 @@ function wireUI() {
 
   const rerender = () => currentRows.length && (render(currentRows), updateLegend());
   el("metric").addEventListener("change", rerender);
-  el("popsrc").addEventListener("change", (e) => {
+  el("popsrc").addEventListener("change", async (e) => {
     popSource = e.target.value;
     updateDataNote();
+    if (popSource === "worldpop" && currentParents.size) await loadTimeSeries(currentParents);
+    updateYearUI();
     if (currentRows.length) (render(currentRows), showStats(currentRows));
+    renderSparkline();
+  });
+  el("year").addEventListener("input", (e) => {
+    selectedYear = tsManifest.years[Number(e.target.value)];
+    el("year-val").textContent = selectedYear;
+    if (currentRows.length) (render(currentRows), showStats(currentRows));
+    renderSparkline();
   });
   el("download").addEventListener("click", downloadGeoJSON);
   el("sample").addEventListener("click", () => {
