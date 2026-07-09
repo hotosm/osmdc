@@ -273,7 +273,7 @@ function render(rows) {
       if (hot) t = 1 - t;
       return [...ramp(t), 200];
     },
-    updateTriggers: { getFillColor: [el("metric").value, rows] },
+    updateTriggers: { getFillColor: [el("metric").value, popSource, rows] },
   });
   overlay.setProps({
     layers: [layer],
