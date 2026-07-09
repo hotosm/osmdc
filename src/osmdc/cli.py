@@ -9,12 +9,24 @@ from osmdc import config
 from osmdc.aggregate import BoundingBox, aggregate_tile, connect, merge_chunks, run_global
 from osmdc.population import kontur_to_parquet
 from osmdc.publish import publish_tiles
+from osmdc.worldpop import worldpop_to_parquet
 
 
 def _add_throttle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--threads", type=int, default=None, help="cap DuckDB worker threads")
     parser.add_argument("--memory-limit", default=None, help="DuckDB memory cap, e.g. 16GB")
     parser.add_argument("--temp-dir", default=None, help="directory for DuckDB spill files")
+
+
+def _parse_population_sources(pairs: list[str] | None) -> dict[str, str]:
+    """Turn repeated NAME=PATH arguments into an ordered {name: path} mapping."""
+    sources: dict[str, str] = {}
+    for pair in pairs or []:
+        name, _, path = pair.partition("=")
+        if not name or not path:
+            raise ValueError(f"expected NAME=PATH, got {pair!r}")
+        sources[name] = path
+    return sources
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True, help="output tile directory")
     parser.add_argument("--resolution", type=int, default=config.H3_RESOLUTION)
     parser.add_argument("--partition-resolution", type=int, default=config.PARTITION_RESOLUTION)
+    parser.add_argument("--release", default=config.OVERTURE_RELEASE, help="Overture release id")
     _add_throttle_args(parser)
     return parser
 
@@ -48,13 +61,17 @@ def build_planet_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lat-step", type=float, default=12.0)
     parser.add_argument("--resolution", type=int, default=config.H3_RESOLUTION)
     parser.add_argument("--partition-resolution", type=int, default=config.PARTITION_RESOLUTION)
+    parser.add_argument("--release", default=config.OVERTURE_RELEASE, help="Overture release id")
     parser.add_argument(
         "--merge-only",
         action="store_true",
         help="skip the chunk scan and only merge existing chunks into tiles",
     )
     parser.add_argument(
-        "--population", default=None, help="parquet of (h3, population) to join in the merge"
+        "--population",
+        action="append",
+        metavar="NAME=PATH",
+        help="population parquet to join, e.g. kontur=kontur.parquet (repeatable)",
     )
     _add_throttle_args(parser)
     return parser
@@ -63,8 +80,18 @@ def build_planet_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     bbox = BoundingBox(*args.bbox)
+    buildings_path, segments_path = config.overture_paths(args.release)
     con = connect(args.threads, args.memory_limit, args.temp_dir)
-    cells = aggregate_tile(con, bbox, args.out, args.resolution, args.partition_resolution)
+    cells = aggregate_tile(
+        con,
+        bbox,
+        args.out,
+        args.resolution,
+        args.partition_resolution,
+        buildings_path,
+        segments_path,
+        args.release,
+    )
     print(f"wrote {cells} cells to {args.out}")
 
 
@@ -94,8 +121,25 @@ def population_main() -> None:
     print(f"wrote {cells} cells, total population {total:,.0f} to {args.out}")
 
 
+def worldpop_main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="osmdc-worldpop",
+        description="Aggregate WorldPop Global 2 rasters to (h3, population) parquet",
+    )
+    parser.add_argument("--tif-dir", required=True, help="directory of unzipped WorldPop GeoTIFFs")
+    parser.add_argument("--out", type=Path, required=True, help="output parquet path")
+    parser.add_argument("--year", type=int, default=config.WORLDPOP_YEAR)
+    _add_throttle_args(parser)
+    args = parser.parse_args()
+    con = connect(args.threads, args.memory_limit, args.temp_dir)
+    cells, total = worldpop_to_parquet(con, args.tif_dir, args.out, args.year)
+    print(f"wrote {cells} cells, total population {total:,.0f} to {args.out}")
+
+
 def planet_main() -> None:
     args = build_planet_parser().parse_args()
+    population_sources = _parse_population_sources(args.population)
+    buildings_path, segments_path = config.overture_paths(args.release)
     con = connect(args.threads, args.memory_limit, args.temp_dir)
     if args.merge_only:
         cells = merge_chunks(
@@ -104,7 +148,8 @@ def planet_main() -> None:
             args.out,
             args.resolution,
             args.partition_resolution,
-            args.population,
+            population_sources,
+            args.release,
         )
         print(f"merged {cells} cells to {args.out}")
         return
@@ -120,7 +165,10 @@ def planet_main() -> None:
         lat_step=args.lat_step,
         resolution=args.resolution,
         partition_resolution=args.partition_resolution,
-        population_path=args.population,
+        buildings_path=buildings_path,
+        segments_path=segments_path,
+        population_sources=population_sources,
+        overture_release=args.release,
     )
 
 

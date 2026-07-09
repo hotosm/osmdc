@@ -18,7 +18,7 @@ function loadScript(src) {
 const DATA_BASE =
   "https://huggingface.co/datasets/kshitijrajsharma/osm-completeness-tiles/resolve/main/";
 
-const ROADS_ENABLED = false;
+const ROADS_ENABLED = true;
 
 const el = (id) => document.getElementById(id);
 const status = (msg) => {
@@ -52,6 +52,24 @@ function ramp(t) {
 let map, overlay, db, manifest, currentRows = [];
 let gridVisible = true;
 let busy = false;
+let popSource = "kontur";
+
+const popNames = () => (manifest.populations || []).map((s) => s.name);
+
+function colFor(metric) {
+  if (metric === "population") return `population_${popSource}`;
+  if (metric === "gap_score") return `gap_score_${popSource}`;
+  return metric;
+}
+
+function updateDataNote() {
+  if (!manifest) return;
+  el("dn-overture").textContent = `Overture ${manifest.overture_release || "-"}`;
+  const active = (manifest.populations || []).find((s) => s.name === popSource);
+  el("dn-population").textContent = active
+    ? `${active.label}${active.date ? ` · ${active.date}` : ""}`
+    : "-";
+}
 
 function setBusy(on) {
   busy = on;
@@ -120,7 +138,33 @@ async function loadManifest() {
   if (!res.ok) throw new Error(`manifest fetch failed: ${res.status}`);
   manifest = await res.json();
   if (manifest.overture_release) el("src-overture").textContent = manifest.overture_release;
-  if (manifest.population_date) el("src-population").textContent = manifest.population_date;
+  buildPopulationUI();
+}
+
+function buildPopulationUI() {
+  const sources = manifest.populations || [];
+  if (sources.length) popSource = sources[0].name;
+  const select = el("popsrc");
+  select.innerHTML = "";
+  for (const source of sources) {
+    const option = document.createElement("option");
+    option.value = source.name;
+    option.textContent = source.label || source.name;
+    select.appendChild(option);
+  }
+  el("popsrc-row").hidden = sources.length < 2;
+  updateDataNote();
+  const list = el("src-populations");
+  list.innerHTML = "";
+  for (const source of sources) {
+    const item = document.createElement("li");
+    const date = source.date ? ` (${source.date})` : "";
+    const name = source.label || source.name;
+    item.innerHTML = source.url
+      ? `<a href="${source.url}" target="_blank" rel="noopener">${name}</a>${date}`
+      : `${name}${date}`;
+    list.appendChild(item);
+  }
 }
 
 function polygonsOf(geojson) {
@@ -172,7 +216,7 @@ async function queryTiles(parents) {
   for (let i = 0; i < names.length; i++) await db.dropFile(`tile_${i}.parquet`);
   return result.toArray().map((r) => {
     const o = r.toJSON();
-    return {
+    const row = {
       h3: o.h3,
       bld_count: Number(o.bld_count),
       bld_osm: Number(o.bld_osm),
@@ -181,9 +225,12 @@ async function queryTiles(parents) {
       road_osm: o.road_osm == null ? 0 : Number(o.road_osm),
       road_pct: o.road_pct == null ? null : Number(o.road_pct),
       road_len_m: Number(o.road_len_m),
-      population: o.population == null ? 0 : Number(o.population),
-      gap_score: o.gap_score == null ? 0 : Number(o.gap_score),
     };
+    for (const name of popNames()) {
+      row[`population_${name}`] = o[`population_${name}`] == null ? 0 : Number(o[`population_${name}`]);
+      row[`gap_score_${name}`] = o[`gap_score_${name}`] == null ? 0 : Number(o[`gap_score_${name}`]);
+    }
+    return row;
   });
 }
 
@@ -191,14 +238,15 @@ const PERCENT_METRICS = new Set(["osm_pct", "road_pct"]);
 const HOT_METRICS = new Set(["gap_score"]);
 
 function metricValue(d) {
-  return d[el("metric").value];
+  return d[colFor(el("metric").value)];
 }
 
 function makeNormaliser(rows) {
   const metric = el("metric").value;
   if (PERCENT_METRICS.has(metric)) return (v) => (v == null ? null : v / 100);
+  const col = colFor(metric);
   let max = 0;
-  for (const d of rows) max = Math.max(max, d[metric] || 0);
+  for (const d of rows) max = Math.max(max, d[col] || 0);
   return (v) => (v == null || max === 0 ? null : v / max);
 }
 
@@ -206,6 +254,8 @@ function render(rows) {
   if (!gridVisible) return overlay.setProps({ layers: [] });
   const norm = makeNormaliser(rows);
   const hot = HOT_METRICS.has(el("metric").value);
+  const popCol = colFor("population");
+  const gapCol = colFor("gap_score");
   const layer = new H3HexagonLayer({
     id: "cells",
     data: rows,
@@ -229,7 +279,7 @@ function render(rows) {
     layers: [layer],
     getTooltip: ({ object }) =>
       object && {
-        html: `<b>${object.h3}</b><br/>buildings: ${object.bld_count} (${object.osm_pct ?? "-"}% in OSM)<br/>roads: ${(object.road_len_m / 1000).toFixed(2)} km${ROADS_ENABLED ? ` (${object.road_pct ?? "-"}% in OSM)` : ""}<br/>population: ${object.population.toLocaleString()} (gap ${object.gap_score.toLocaleString()})`,
+        html: `<b>${object.h3}</b><br/>buildings: ${object.bld_count} (${object.osm_pct ?? "-"}% in OSM)<br/>roads: ${(object.road_len_m / 1000).toFixed(2)} km${ROADS_ENABLED ? ` (${object.road_pct ?? "-"}% in OSM)` : ""}<br/>population: ${(object[popCol] ?? 0).toLocaleString()} (gap ${(object[gapCol] ?? 0).toLocaleString()})`,
         style: {
           background: "#ffffff", color: "#1e293b", fontSize: "12px", padding: "6px",
           borderRadius: "4px", boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
@@ -239,6 +289,8 @@ function render(rows) {
 }
 
 function showStats(rows) {
+  const popCol = colFor("population");
+  const gapCol = colFor("gap_score");
   let bld = 0, bldOsm = 0, road = 0, roadOsm = 0, km = 0, pop = 0, gap = 0;
   for (const d of rows) {
     bld += d.bld_count;
@@ -246,8 +298,8 @@ function showStats(rows) {
     road += d.road_count;
     roadOsm += d.road_osm;
     km += d.road_len_m / 1000;
-    pop += d.population;
-    gap += d.gap_score;
+    pop += d[popCol] ?? 0;
+    gap += d[gapCol] ?? 0;
   }
   el("s-cells").textContent = rows.length.toLocaleString();
   el("s-bld").textContent = bld.toLocaleString();
@@ -396,6 +448,11 @@ function wireUI() {
 
   const rerender = () => currentRows.length && (render(currentRows), updateLegend());
   el("metric").addEventListener("change", rerender);
+  el("popsrc").addEventListener("change", (e) => {
+    popSource = e.target.value;
+    updateDataNote();
+    if (currentRows.length) (render(currentRows), showStats(currentRows));
+  });
   el("download").addEventListener("click", downloadGeoJSON);
   el("sample").addEventListener("click", () => process(SAMPLE));
   el("assess").addEventListener("click", assessView);

@@ -128,6 +128,7 @@ def aggregate_tile(
     partition_resolution: int = config.PARTITION_RESOLUTION,
     buildings_path: str = config.BUILDINGS_PATH,
     segments_path: str = config.SEGMENTS_PATH,
+    overture_release: str = config.OVERTURE_RELEASE,
 ) -> int:
     """Write per-cell metrics for one bbox as parquet sharded by coarse H3 parent.
 
@@ -145,11 +146,17 @@ def aggregate_tile(
         f"SELECT count(*) FROM read_parquet('{out_dir}/**/*.parquet')"
     ).fetchone()
     assert count_row is not None
-    write_manifest(out_dir, resolution, partition_resolution)
+    write_manifest(out_dir, resolution, partition_resolution, overture_release)
     return count_row[0]
 
 
-def write_manifest(out_dir: Path, resolution: int, partition_resolution: int) -> None:
+def write_manifest(
+    out_dir: Path,
+    resolution: int,
+    partition_resolution: int,
+    overture_release: str = config.OVERTURE_RELEASE,
+    populations: list[dict[str, str]] | None = None,
+) -> None:
     """Write a manifest mapping each coarse H3 parent to its tile path for the browser."""
     tiles = {
         path.parent.name.removeprefix("h3_parent="): str(path.relative_to(out_dir))
@@ -158,8 +165,8 @@ def write_manifest(out_dir: Path, resolution: int, partition_resolution: int) ->
     manifest = {
         "resolution": resolution,
         "partition_resolution": partition_resolution,
-        "overture_release": config.OVERTURE_RELEASE,
-        "population_date": config.KONTUR_POPULATION_DATE,
+        "overture_release": overture_release,
+        "populations": populations or [],
         "tiles": tiles,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -218,21 +225,20 @@ def merge_chunks(
     out_dir: Path,
     resolution: int,
     partition_resolution: int,
-    population_path: str | None = None,
+    population_sources: dict[str, str] | None = None,
+    overture_release: str = config.OVERTURE_RELEASE,
 ) -> int:
-    """Sum partial cells across all chunks into browser tiles, joining population.
+    """Sum partial cells across all chunks into browser tiles, joining each population.
 
-    A full outer join with the population cells adds cells that have people but no
-    mapped buildings. gap_score weights population by how incomplete the buildings are.
+    Every named population source contributes population_<name> and gap_score_<name>
+    columns. The cell set is the union of chunk cells and every source's cells, so
+    people living where no building is mapped still appear. gap_score weights a
+    source's population by how incomplete the buildings are.
     """
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    pop_source = (
-        f"read_parquet('{population_path}')"
-        if population_path
-        else "(SELECT NULL::VARCHAR AS h3, NULL::DOUBLE AS population WHERE false)"
-    )
+    population_sources = population_sources or {}
     chunk_columns = {
         row[0]
         for row in con.execute(
@@ -241,9 +247,21 @@ def merge_chunks(
     }
     # Treat road_osm as zero when the chunks do not carry that column.
     road_osm_agg = "sum(road_osm)" if "road_osm" in chunk_columns else "0"
-    con.execute(f"""
-        CREATE OR REPLACE TEMP TABLE merged_cells AS
-        WITH chunk_cells AS (
+    completeness = "coalesce(c.bld_osm * 1.0 / nullif(c.bld_count, 0), 0)"
+
+    pop_ctes, key_unions, pop_selects, pop_joins = [], ["SELECT h3 FROM chunk_cells"], [], []
+    for name, path in population_sources.items():
+        alias = f"pop_{name}"
+        pop_ctes.append(f"{alias} AS (SELECT h3, population FROM read_parquet('{path}'))")
+        key_unions.append(f"SELECT h3 FROM {alias}")
+        pop_selects.append(f"coalesce({alias}.population, 0) AS population_{name}")
+        pop_selects.append(
+            f"round(coalesce({alias}.population, 0) * (1 - {completeness})) AS gap_score_{name}"
+        )
+        pop_joins.append(f"LEFT JOIN {alias} ON k.h3 = {alias}.h3")
+
+    ctes = [
+        f"""chunk_cells AS (
             SELECT h3,
                    any_value(h3_parent) AS h3_parent,
                    sum(bld_count) AS bld_count,
@@ -253,36 +271,43 @@ def merge_chunks(
                    sum(CASE WHEN isfinite(road_len_m) THEN road_len_m ELSE 0 END) AS road_len_m
             FROM read_parquet('{chunk_dir}/chunk_*.parquet')
             GROUP BY h3
-        ),
-        pop AS (SELECT h3, population FROM {pop_source})
-        SELECT
-            coalesce(c.h3, p.h3) AS h3,
-            coalesce(
-                c.h3_parent,
-                h3_h3_to_string(h3_cell_to_parent(h3_string_to_h3(p.h3), {partition_resolution}))
-            ) AS h3_parent,
-            coalesce(c.bld_count, 0) AS bld_count,
-            coalesce(c.bld_osm, 0) AS bld_osm,
-            round(coalesce(c.bld_osm, 0) * 100.0
-                  / nullif(coalesce(c.bld_count, 0), 0), 1) AS osm_pct,
-            coalesce(c.road_count, 0) AS road_count,
-            coalesce(c.road_osm, 0) AS road_osm,
-            round(coalesce(c.road_osm, 0) * 100.0
-                  / nullif(coalesce(c.road_count, 0), 0), 1) AS road_pct,
-            round(coalesce(c.road_len_m, 0), 1) AS road_len_m,
-            coalesce(p.population, 0) AS population,
-            round(
-                coalesce(p.population, 0)
-                * (1 - coalesce(c.bld_osm * 1.0 / nullif(c.bld_count, 0), 0))
-            ) AS gap_score
-        FROM chunk_cells c FULL OUTER JOIN pop p ON c.h3 = p.h3
+        )""",
+        *pop_ctes,
+        f"keys AS ({' UNION '.join(key_unions)})",
+    ]
+    select_cols = [
+        "k.h3 AS h3",
+        "coalesce(c.h3_parent, "
+        f"h3_h3_to_string(h3_cell_to_parent(h3_string_to_h3(k.h3), {partition_resolution}))"
+        ") AS h3_parent",
+        "coalesce(c.bld_count, 0) AS bld_count",
+        "coalesce(c.bld_osm, 0) AS bld_osm",
+        "round(coalesce(c.bld_osm, 0) * 100.0 / nullif(coalesce(c.bld_count, 0), 0), 1) AS osm_pct",
+        "coalesce(c.road_count, 0) AS road_count",
+        "coalesce(c.road_osm, 0) AS road_osm",
+        "round(coalesce(c.road_osm, 0) * 100.0 "
+        "/ nullif(coalesce(c.road_count, 0), 0), 1) AS road_pct",
+        "round(coalesce(c.road_len_m, 0), 1) AS road_len_m",
+        *pop_selects,
+    ]
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE merged_cells AS
+        WITH {", ".join(ctes)}
+        SELECT {", ".join(select_cols)}
+        FROM keys k
+        LEFT JOIN chunk_cells c ON k.h3 = c.h3
+        {" ".join(pop_joins)}
     """)
     con.execute(
         f"COPY merged_cells TO '{out_dir}' "
         "(FORMAT PARQUET, PARTITION_BY (h3_parent), COMPRESSION zstd)"
     )
     _compact_partitions(con, out_dir)
-    write_manifest(out_dir, resolution, partition_resolution)
+    populations = [
+        {"name": name, **config.POPULATION_SOURCES.get(name, {"label": name})}
+        for name in population_sources
+    ]
+    write_manifest(out_dir, resolution, partition_resolution, overture_release, populations)
     count_row = con.execute("SELECT count(*) FROM merged_cells").fetchone()
     assert count_row is not None
     return count_row[0]
@@ -318,7 +343,8 @@ def run_global(
     partition_resolution: int = config.PARTITION_RESOLUTION,
     buildings_path: str = config.BUILDINGS_PATH,
     segments_path: str = config.SEGMENTS_PATH,
-    population_path: str | None = None,
+    population_sources: dict[str, str] | None = None,
+    overture_release: str = config.OVERTURE_RELEASE,
 ) -> int:
     """Aggregate a lon/lat range chunk by chunk, then merge into browser tiles.
 
@@ -347,6 +373,14 @@ def run_global(
         cells = con.execute(f"SELECT count(*) FROM read_parquet('{target}')").fetchone()
         assert cells is not None
         print(f"{label} -> {cells[0]} cells", flush=True)
-    total = merge_chunks(con, chunk_dir, out_dir, resolution, partition_resolution, population_path)
+    total = merge_chunks(
+        con,
+        chunk_dir,
+        out_dir,
+        resolution,
+        partition_resolution,
+        population_sources,
+        overture_release,
+    )
     print(f"merged {total} cells to {out_dir}", flush=True)
     return total

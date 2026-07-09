@@ -128,13 +128,13 @@ def test_merge_joins_population_and_gap(tmp_path):
         TO '{pop}' (FORMAT PARQUET)
     """)
 
-    cells = merge_chunks(con, chunk_dir, tmp_path / "out", 8, 2, str(pop))
+    cells = merge_chunks(con, chunk_dir, tmp_path / "out", 8, 2, {"kontur": str(pop)})
     assert cells == 2  # cell_a (buildings + people) and cell_b (people only)
 
     rows = {
         r[0]: r
         for r in con.execute(
-            f"SELECT h3, bld_count, population, gap_score "
+            f"SELECT h3, bld_count, population_kontur, gap_score_kontur "
             f"FROM read_parquet('{tmp_path / 'out'}/**/*.parquet')"
         ).fetchall()
     }
