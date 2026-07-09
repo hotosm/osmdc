@@ -118,8 +118,30 @@ async function initMap() {
     attribution: "Imagery © Esri, Maxar",
   });
   map.addLayer({ id: "esri", type: "raster", source: "esri", layout: { visibility: "none" } });
+  map.addSource("aoi", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({
+    id: "aoi-casing", type: "line", source: "aoi",
+    paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.85 },
+  });
+  map.addLayer({
+    id: "aoi-line", type: "line", source: "aoi",
+    paint: { "line-color": "#111827", "line-width": 1.75, "line-dasharray": [2, 2] },
+  });
   map.on("moveend", updateAssessButton);
   updateAssessButton();
+}
+
+function setAoi(polys) {
+  map.getSource("aoi").setData({
+    type: "Feature",
+    geometry: { type: "MultiPolygon", coordinates: polys },
+  });
+}
+
+function clearAoi() {
+  if (map?.getSource("aoi")) {
+    map.getSource("aoi").setData({ type: "FeatureCollection", features: [] });
+  }
 }
 
 async function initDuckDB() {
@@ -320,7 +342,13 @@ function fitTo(rows) {
   map.fitBounds(b, { padding: 40, duration: 600 });
 }
 
-async function process(geojson, fit = true) {
+function fitToPolys(polys) {
+  const b = new maplibregl.LngLatBounds();
+  for (const rings of polys) for (const ring of rings) for (const [lng, lat] of ring) b.extend([lng, lat]);
+  if (!b.isEmpty()) map.fitBounds(b, { padding: 40, duration: 600 });
+}
+
+async function process(geojson, fit = true, showAoi = true) {
   setBusy(true);
   try {
     status("Reading area...");
@@ -331,6 +359,7 @@ async function process(geojson, fit = true) {
         ? `Only Polygon and MultiPolygon are supported, not ${found}.`
         : "No polygon found in that file.");
     }
+    showAoi ? setAoi(polys) : clearAoi();
 
     const cells = coveredCells(polys, manifest.resolution);
     const parents = new Set([...cells].map((c) => h3.cellToParent(c, manifest.partition_resolution)));
@@ -339,8 +368,11 @@ async function process(geojson, fit = true) {
     const all = await queryTiles(parents);
     currentRows = all.filter((d) => cells.has(d.h3));
 
-    if (currentRows.length === 0) return status("No data tiles cover this area yet.");
     render(currentRows);
+    if (currentRows.length === 0) {
+      if (fit) fitToPolys(polys);
+      return status("No H3 coverage here yet. The dashed AOI outline is shown.");
+    }
     showStats(currentRows);
     if (fit) fitTo(currentRows);
     el("download").disabled = false;
@@ -367,7 +399,7 @@ function assessView() {
       [b.getEast(), b.getNorth()], [b.getWest(), b.getNorth()], [b.getWest(), b.getSouth()],
     ]],
   };
-  return process(poly, false);
+  return process(poly, false, false);
 }
 
 let searchHits = [];
@@ -406,6 +438,7 @@ function clearSearch() {
   searchHits = [];
   currentRows = [];
   overlay.setProps({ layers: [] });
+  clearAoi();
   el("stats").hidden = true;
   el("download").disabled = true;
   status("Ready.");
