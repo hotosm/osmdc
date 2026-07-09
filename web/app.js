@@ -59,11 +59,8 @@ let currentParents = new Set();
 let tsManifest = null;
 let tsData = new Map();
 let selectedYear = null;
+let invertColors = false;
 const DEFAULT_YEAR = 2025;
-// WorldPop interpolates between the c.2010 and c.2020 census rounds; later years are projected.
-const LAST_CENSUS_YEAR = 2020;
-
-const yearLabel = (year) => (year > LAST_CENSUS_YEAR ? `${year} (projected)` : `${year}`);
 
 const popNames = () => (manifest.populations || []).map((s) => s.name);
 
@@ -77,9 +74,13 @@ function updateDataNote() {
   if (!manifest) return;
   el("dn-overture").textContent = `Overture ${manifest.overture_release || "-"}`;
   const active = (manifest.populations || []).find((s) => s.name === popSource);
-  el("dn-population").textContent = active
-    ? `${active.label}${active.date ? ` · ${active.date}` : ""}`
-    : "-";
+  if (!active) {
+    el("dn-population").textContent = "-";
+    return;
+  }
+  // While scrubbing, the shown population is the selected year, not the manifest default.
+  const detail = yearActive() ? `${selectedYear}, ${tsManifest.release}` : active.date;
+  el("dn-population").textContent = `${active.label}${detail ? ` · ${detail}` : ""}`;
 }
 
 function setBusy(on) {
@@ -346,14 +347,23 @@ function makeNormaliser(rows) {
   const metric = el("metric").value;
   if (PERCENT_METRICS.has(metric)) return (v) => (v == null ? null : v / 100);
   let max = 0;
-  for (const d of rows) max = Math.max(max, metricValue(d) || 0);
+  if (metric === "population" && yearActive()) {
+    // One scale across every year, otherwise each year rescales and colours cannot be compared.
+    for (const d of rows) {
+      const series = tsData.get(d.h3);
+      if (series) for (const value of series) max = Math.max(max, value);
+    }
+  } else {
+    for (const d of rows) max = Math.max(max, metricValue(d) || 0);
+  }
   return (v) => (v == null || max === 0 ? null : v / max);
 }
 
 function render(rows) {
   if (!gridVisible) return overlay.setProps({ layers: [] });
   const norm = makeNormaliser(rows);
-  const hot = HOT_METRICS.has(el("metric").value);
+  // Gap reads best hot-first; the invert checkbox flips whatever the metric's default is.
+  const flip = HOT_METRICS.has(el("metric").value) !== invertColors;
   const gapCol = colFor("gap_score");
   const dataSet = new Set(rows.map((d) => d.h3));
   const emptyCells = coverageCells.filter((h) => !dataSet.has(h));
@@ -383,10 +393,12 @@ function render(rows) {
     getFillColor: (d) => {
       let t = norm(metricValue(d));
       if (t == null) return [80, 80, 80, 120];
-      if (hot) t = 1 - t;
+      if (flip) t = 1 - t;
       return [...ramp(t), 200];
     },
-    updateTriggers: { getFillColor: [el("metric").value, popSource, selectedYear, rows] },
+    updateTriggers: {
+      getFillColor: [el("metric").value, popSource, selectedYear, invertColors, rows],
+    },
   });
   overlay.setProps({
     layers: [coverageLayer, layer],
@@ -466,12 +478,14 @@ async function process(geojson, fit = true, showAoi = true) {
       el("stats").hidden = true;
       el("download").disabled = true;
       updateYearUI();
+      updateDataNote();
       renderSparkline();
       if (fit) fitToPolys(polys);
       return status(`No mapped data in ${cells.size} covered cells. Coverage shown faint.`);
     }
     showStats(currentRows);
     updateYearUI();
+    updateDataNote();
     renderSparkline();
     if (fit) coverageCells.length ? fitToPolys(polys) : fitTo(currentRows);
     el("download").disabled = false;
@@ -499,7 +513,7 @@ function updateYearUI() {
   const slider = el("year");
   slider.max = String(years.length - 1);
   slider.value = String(years.indexOf(selectedYear));
-  el("year-val").textContent = yearLabel(selectedYear);
+  el("year-val").textContent = selectedYear;
   el("year-min").textContent = years[0];
   el("year-max").textContent = years.at(-1);
 }
@@ -664,9 +678,15 @@ function wireUI() {
   });
   el("year").addEventListener("input", (e) => {
     selectedYear = tsManifest.years[Number(e.target.value)];
-    el("year-val").textContent = yearLabel(selectedYear);
+    el("year-val").textContent = selectedYear;
+    updateDataNote();
     if (currentRows.length) (render(currentRows), showStats(currentRows));
     renderSparkline();
+  });
+  el("invert").addEventListener("change", (e) => {
+    invertColors = e.target.checked;
+    updateLegend();
+    if (currentRows.length) render(currentRows);
   });
   el("download").addEventListener("click", downloadGeoJSON);
   el("sample").addEventListener("click", () => {
@@ -726,6 +746,7 @@ function updateLegend() {
   el("legend-label").textContent = legend.label;
   el("legend-min").textContent = legend.min;
   el("legend-max").textContent = legend.max;
+  el("bar").classList.toggle("inverted", invertColors);
 }
 
 const SAMPLE = {

@@ -75,6 +75,9 @@
       .stat[hidden] { display: none; }
       #legend { margin-top: 16px; font-size: 11px; color: var(--muted); }
       #bar { height: 10px; border-radius: 5px; margin: 6px 0; background: linear-gradient(90deg, #d73027, #fee08b, #1a9850); }
+      #bar.inverted { background: linear-gradient(90deg, #1a9850, #fee08b, #d73027); }
+      .invert-row { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--muted); cursor: pointer; }
+      .invert-row input { accent-color: var(--accent); }
       #status { margin-top: 14px; font-size: 12px; color: var(--muted); min-height: 16px; }
       #status.error { font-size: 13px; font-weight: 600; color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 9px 11px; }
       .footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
@@ -169,6 +172,7 @@
           <div class="row" style="justify-content: space-between; margin-top: 0">
             <span id="legend-min">0%</span><span id="legend-max">100%</span>
           </div>
+          <label class="invert-row"><input type="checkbox" id="invert" /> Invert colours</label>
         </div>
 
         <div class="stats" id="stats" hidden>
@@ -249,14 +253,14 @@
         </p>
         <h3>Population over time</h3>
         <p>
-          With WorldPop selected, a year slider covers 2015 to 2030. WorldPop interpolates
-          between the c.2010 and c.2020 census rounds, so years up to 2020 are estimates and
-          later years, 2030 included, are <b>projections</b>, aligned to national totals from
-          the UN World Population Prospects 2024. Projected years are labelled in the panel.
-        </p>
-        <p>
-          The slider moves population only. The mapping gap stays on its published year:
-          Overture has no building history, so a gap trend would not be measured.
+          With WorldPop selected, a year slider covers 2015 to 2030, and the map, the population
+          figure and the sparkline all follow the chosen year. Every year is a modelled estimate
+          built from timepoints that differ by country, so read it as an estimate, not a count.
+          Details and the per-country sources are in the
+          <a href="https://data.worldpop.org/repo/prj/Global_2015_2030/R2025A/doc/Global2_Release_Statement_R2025A_v1.pdf" target="_blank" rel="noopener">release statement</a>
+          and the
+          <a href="https://data.worldpop.org/repo/prj/Global_2015_2030/R2025A/doc/census/global2_census_data_sources_R2025A_v1.xlsx" target="_blank" rel="noopener">census sources</a>.
+          The slider moves population only; the mapping gap stays on its published year.
         </p>
         <h3>The grid</h3>
         <p>
