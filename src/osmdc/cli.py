@@ -167,8 +167,18 @@ def _refresh_plan(args: argparse.Namespace) -> None:
     payload = refresh.plan_json(plan)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2))
-    summary = {key: payload[key] for key in ("release", "years", "needs_update")}
-    print(json.dumps(summary))
+    print(
+        json.dumps(
+            {
+                "catalogue": {"release": payload["release"], "years": payload["years"]},
+                "published": {
+                    "release": payload["published_release"],
+                    "years": payload["published_years"],
+                },
+                "needs_update": payload["needs_update"],
+            }
+        )
+    )
 
 
 def _refresh_year(args: argparse.Namespace) -> None:
