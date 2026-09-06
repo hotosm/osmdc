@@ -16,6 +16,8 @@ function loadScript(src) {
 
 const DATA_BASE =
   "https://huggingface.co/datasets/kshitijrajsharma/osm-completeness-tiles/resolve/main/";
+const POPULATION_BASE =
+  "https://huggingface.co/datasets/kshitijrajsharma/worldpop-h3/resolve/main/";
 
 const ROADS_ENABLED = true;
 
@@ -281,7 +283,7 @@ const HOT_METRICS = new Set(["gap_score"]);
 
 async function ensureTsManifest() {
   if (tsManifest !== null) return tsManifest;
-  const res = await fetch(new URL("worldpop_ts/manifest.json", DATA_BASE));
+  const res = await fetch(new URL("manifest.json", POPULATION_BASE));
   if (!res.ok && res.status !== 404) throw new Error(`population years unavailable (${res.status})`);
   tsManifest = res.ok ? await res.json() : false;
   return tsManifest;
@@ -295,7 +297,7 @@ async function fetchTs(parents) {
   for (const parent of parents) {
     const rel = tsManifest.tiles[parent];
     if (!rel) continue;
-    const response = await fetch(new URL(`worldpop_ts/${rel}`, DATA_BASE).href);
+    const response = await fetch(new URL(rel, POPULATION_BASE).href);
     if (!response.ok) continue;
     const name = `ts_${names.length}.parquet`;
     await db.registerFileBuffer(name, new Uint8Array(await response.arrayBuffer()));

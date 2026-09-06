@@ -27,7 +27,9 @@ just test
 WorldPop Global 2 publishes an annual release covering the years 2015 to 2030. The
 `Refresh WorldPop tiles` workflow runs on the first of each month and compares the
 release and years offered by the [WorldPop STAC API](https://api.stac.worldpop.org) with
-the `worldpop_ts/manifest.json` already published in the dataset. When they match it
+the manifest already published in the
+[worldpop-h3](https://huggingface.co/datasets/kshitijrajsharma/worldpop-h3) dataset,
+which holds the population tiles on their own. When they match it
 stops there, which takes about fifteen seconds. When they differ, it works through the
 years one at a time, downloading each year's 1km constrained, UN-adjusted country
 rasters, binning them into H3 cells and deleting the rasters, then pivots the years into

@@ -17,7 +17,7 @@ jobs:
     # A full rebuild measures about 90 minutes; the rest is headroom, not a budget.
     timeout-minutes: 300
     env:
-      HF_REPO: kshitijrajsharma/osm-completeness-tiles
+      HF_REPO: kshitijrajsharma/worldpop-h3
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1

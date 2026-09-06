@@ -16,7 +16,7 @@ from osmdc import config
 
 # 1km constrained, UN-adjusted total population: the raster form worldpop.py bins.
 ASSET_ID = re.compile(r"^([a-z]{3})_pop_(\d{4})_CN_1km_(R\d{4}[A-Z])_UA_v1$")
-TS_MANIFEST = f"{config.WORLDPOP_TS_PATH}/manifest.json"
+TS_MANIFEST = "manifest.json"
 WORKERS = 8
 
 # Thousands of requests against one public host, so a dropped connection is retried.
@@ -207,12 +207,7 @@ def verify_published(tiles_dir: Path, repo_id: str, token: str | None = None) ->
     which the next plan would read as nothing to do.
     """
     local = {str(path.relative_to(tiles_dir)) for path in tiles_dir.rglob("*") if path.is_file()}
-    prefix = f"{config.WORLDPOP_TS_PATH}/"
-    published = {
-        name.removeprefix(prefix)
-        for name in HfApi(token=token).list_repo_files(repo_id, repo_type="dataset")
-        if name.startswith(prefix)
-    }
+    published = set(HfApi(token=token).list_repo_files(repo_id, repo_type="dataset"))
     missing = sorted(local - published)
     if missing:
         raise RuntimeError(

@@ -199,13 +199,7 @@ def _refresh_publish(args: argparse.Namespace) -> None:
     write_ts_manifest(args.tiles, years, cells, plan.catalog.release)
     print(f"built {cells} cells for {years[0]}-{years[-1]}, release {plan.catalog.release}")
     if args.repo:
-        url = publish_tiles(
-            args.tiles,
-            args.repo,
-            args.token,
-            path_in_repo=config.WORLDPOP_TS_PATH,
-            delete_patterns=["**"],
-        )
+        url = publish_tiles(args.tiles, args.repo, args.token, delete_patterns=["h3_parent=*/**"])
         refresh.verify_published(args.tiles, args.repo, args.token)
         print(f"published to {url}")
 

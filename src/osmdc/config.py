@@ -30,7 +30,6 @@ KONTUR_POPULATION_DATE = "2023-11-01"
 WORLDPOP_RELEASE = "R2025A"
 WORLDPOP_STAC = "https://api.stac.worldpop.org"
 WORLDPOP_YEAR = 2025
-WORLDPOP_TS_PATH = "worldpop_ts"
 
 # Published in the manifest so the browser can label each source.
 POPULATION_SOURCES = {
