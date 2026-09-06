@@ -2,6 +2,9 @@ import maplibregl from "https://cdn.jsdelivr.net/npm/maplibre-gl@4/+esm";
 import * as h3 from "https://cdn.jsdelivr.net/npm/h3-js@4/+esm";
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
+// The deck.gl UMD bundle resolves h3-js off the global scope, not through imports.
+window.h3 = h3;
+
 let MapboxOverlay, H3HexagonLayer;
 
 function loadScript(src) {
