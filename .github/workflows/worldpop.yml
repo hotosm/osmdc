@@ -1,0 +1,46 @@
+name: Refresh WorldPop tiles
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worldpop
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # A full rebuild measures about 90 minutes; the rest is headroom, not a budget.
+    timeout-minutes: 300
+    env:
+      HF_REPO: kshitijrajsharma/osm-completeness-tiles
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --no-dev
+
+      - id: plan
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          uv run osmdc-refresh plan --repo "$HF_REPO" --out plan.json
+          echo "needs_update=$(jq -r .needs_update plan.json)" >> "$GITHUB_OUTPUT"
+
+      # Each year is about 241 country rasters and 382MB, deleted once binned.
+      - if: steps.plan.outputs.needs_update == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          mkdir -p duckdb-temp
+          for year in $(jq -r '.years[]' plan.json); do
+            uv run osmdc-refresh worldpop-year --plan plan.json --year "$year" \
+              --out-dir cells --memory-limit 8GB --temp-dir duckdb-temp
+          done
+          uv run osmdc-refresh worldpop-publish --plan plan.json --scratch-dir cells \
+            --tiles tiles --repo "$HF_REPO" --memory-limit 8GB --temp-dir duckdb-temp

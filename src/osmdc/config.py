@@ -1,5 +1,3 @@
-"""Static configuration for the Overture to H3 aggregation pipeline."""
-
 OVERTURE_RELEASE = "2026-06-17.0"
 
 
@@ -28,13 +26,13 @@ KONTUR_POPULATION_URL = (
 )
 KONTUR_POPULATION_DATE = "2023-11-01"
 
-# WorldPop Global 2 total population (constrained, UN-adjusted, 1km GeoTIFF, CC BY).
-# One raster per country and year, discoverable through the STAC API below.
+# WorldPop Global 2: one 1km constrained, UN-adjusted raster per country and year.
 WORLDPOP_RELEASE = "R2025A"
 WORLDPOP_STAC = "https://api.stac.worldpop.org"
 WORLDPOP_YEAR = 2025
+WORLDPOP_TS_PATH = "worldpop_ts"
 
-# Labels and dates surfaced to the browser per population source.
+# Published in the manifest so the browser can label each source.
 POPULATION_SOURCES = {
     "kontur": {
         "label": "Kontur Population",

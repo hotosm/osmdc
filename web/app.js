@@ -2,7 +2,6 @@ import maplibregl from "https://cdn.jsdelivr.net/npm/maplibre-gl@4/+esm";
 import * as h3 from "https://cdn.jsdelivr.net/npm/h3-js@4/+esm";
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-window.h3 = h3;
 let MapboxOverlay, H3HexagonLayer;
 
 function loadScript(src) {
@@ -78,7 +77,6 @@ function updateDataNote() {
     el("dn-population").textContent = "-";
     return;
   }
-  // While scrubbing, the shown population is the selected year, not the manifest default.
   const detail = yearActive() ? `${selectedYear}, ${tsManifest.release}` : active.date;
   el("dn-population").textContent = `${active.label}${detail ? ` · ${detail}` : ""}`;
 }
@@ -220,10 +218,12 @@ function polygonsOf(geojson) {
 function coveredCells(polys, resolution) {
   const cells = new Set();
   for (const rings of polys) {
-    for (const cell of h3.polygonToCells(rings, resolution, true)) cells.add(cell);
-    if (cells.size === 0) {
-      for (const [lng, lat] of rings[0]) cells.add(h3.latLngToCell(lat, lng, resolution));
-    }
+    const covered = h3.polygonToCells(rings, resolution, true);
+    // A polygon smaller than one cell covers none, so fall back to its outer ring.
+    const found = covered.length
+      ? covered
+      : rings[0].map(([lng, lat]) => h3.latLngToCell(lat, lng, resolution));
+    for (const cell of found) cells.add(cell);
   }
   return cells;
 }
@@ -282,6 +282,7 @@ const HOT_METRICS = new Set(["gap_score"]);
 async function ensureTsManifest() {
   if (tsManifest !== null) return tsManifest;
   const res = await fetch(new URL("worldpop_ts/manifest.json", DATA_BASE));
+  if (!res.ok && res.status !== 404) throw new Error(`population years unavailable (${res.status})`);
   tsManifest = res.ok ? await res.json() : false;
   return tsManifest;
 }
@@ -437,20 +438,13 @@ function showStats(rows) {
   el("stats").hidden = false;
 }
 
-function fitTo(rows) {
-  if (rows.length === 0) return;
-  const b = new maplibregl.LngLatBounds();
-  for (const d of rows) for (const [lat, lng] of h3.cellToBoundary(d.h3)) b.extend([lng, lat]);
-  map.fitBounds(b, { padding: 40, duration: 600 });
-}
-
 function fitToPolys(polys) {
   const b = new maplibregl.LngLatBounds();
   for (const rings of polys) for (const ring of rings) for (const [lng, lat] of ring) b.extend([lng, lat]);
   if (!b.isEmpty()) map.fitBounds(b, { padding: 40, duration: 600 });
 }
 
-async function process(geojson, fit = true, showAoi = true) {
+async function process(geojson, fit = true) {
   setBusy(true);
   try {
     status("Reading area...");
@@ -461,10 +455,10 @@ async function process(geojson, fit = true, showAoi = true) {
         ? `Only Polygon and MultiPolygon are supported, not ${found}.`
         : "No polygon found in that file.");
     }
-    if (showAoi) setAoi(polys);
+    setAoi(polys);
 
     const cells = coveredCells(polys, manifest.resolution);
-    coverageCells = showAoi ? [...cells] : [];
+    coverageCells = [...cells];
     const parents = new Set([...cells].map((c) => h3.cellToParent(c, manifest.partition_resolution)));
     currentParents = parents;
 
@@ -487,10 +481,12 @@ async function process(geojson, fit = true, showAoi = true) {
     updateYearUI();
     updateDataNote();
     renderSparkline();
-    if (fit) coverageCells.length ? fitToPolys(polys) : fitTo(currentRows);
+    if (fit) fitToPolys(polys);
     el("download").disabled = false;
     const empty = cells.size - currentRows.length;
     status(`${currentRows.length} cells with data${empty > 0 ? `, ${empty} empty` : ""}.`);
+  } catch (failure) {
+    error(failure.message);
   } finally {
     setBusy(false);
   }
@@ -565,7 +561,7 @@ function assessView() {
       [b.getEast(), b.getNorth()], [b.getWest(), b.getNorth()], [b.getWest(), b.getSouth()],
     ]],
   };
-  return process(poly, false, true);
+  return process(poly, false);
 }
 
 let searchHits = [];
@@ -576,7 +572,7 @@ async function searchSuggest(query) {
   const url =
     "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=" + encodeURIComponent(query);
   const res = await fetch(url);
-  if (!res.ok) return;
+  if (!res.ok) return error(`Place search unavailable (${res.status}).`);
   searchHits = await res.json();
   results.innerHTML = "";
   for (const [i, hit] of searchHits.entries()) {
@@ -597,7 +593,7 @@ function selectPlace(hit) {
   status(`Moved to ${hit.display_name.split(",").slice(0, 2).join(",")}.`);
 }
 
-function clearSearch() {
+function clearAll() {
   el("search").value = "";
   el("search-results").hidden = true;
   el("search-clear").classList.remove("show");
@@ -666,12 +662,21 @@ function wireUI() {
   );
   drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]));
 
-  const rerender = () => currentRows.length && (render(currentRows), updateLegend());
+  const rerender = () => {
+    if (currentRows.length) render(currentRows);
+    updateLegend();
+  };
   el("metric").addEventListener("change", rerender);
   el("popsrc").addEventListener("change", async (e) => {
     popSource = e.target.value;
     updateDataNote();
-    if (popSource === "worldpop" && currentParents.size) await loadTimeSeries(currentParents);
+    if (popSource === "worldpop" && currentParents.size) {
+      try {
+        await loadTimeSeries(currentParents);
+      } catch (failure) {
+        error(failure.message);
+      }
+    }
     updateYearUI();
     if (currentRows.length) (render(currentRows), showStats(currentRows));
     renderSparkline();
@@ -715,7 +720,7 @@ function wireUI() {
     const item = e.target.closest("li");
     if (item) selectPlace(searchHits[Number(item.dataset.index)]);
   });
-  el("search-clear").addEventListener("click", clearSearch);
+  el("search-clear").addEventListener("click", clearAll);
   document.addEventListener("click", (e) => {
     if (!el("search-box").contains(e.target)) el("search-results").hidden = true;
   });

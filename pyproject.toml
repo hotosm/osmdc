@@ -8,10 +8,12 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "duckdb>=1.5.4",
-    "h3>=4.5.0",
+    "httpx>=0.28.1",
     "huggingface-hub>=1.20.1",
+    "numpy>=2.5.1",
     "pyarrow>=24.0.0",
     "rasterio>=1.5.0",
+    "tenacity>=9.1.4",
 ]
 
 [project.scripts]
@@ -21,6 +23,7 @@ osmdc-publish = "osmdc.cli:publish_main"
 osmdc-population = "osmdc.cli:population_main"
 osmdc-worldpop = "osmdc.cli:worldpop_main"
 osmdc-worldpop-ts = "osmdc.cli:worldpop_ts_main"
+osmdc-refresh = "osmdc.cli:refresh_main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12.0"]
@@ -34,6 +37,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [dependency-groups]
 dev = [
+    "h3>=4.5.0",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "ruff>=0.15.19",
     "ty>=0.0.53",

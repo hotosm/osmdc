@@ -1,7 +1,5 @@
 """Publish the merged H3 completeness tiles to a Hugging Face dataset repository."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from huggingface_hub import HfApi
@@ -12,12 +10,12 @@ def publish_tiles(
     repo_id: str,
     token: str | None = None,
     path_in_repo: str | None = None,
+    delete_patterns: list[str] | None = None,
 ) -> str:
-    """Upload a tile directory (parquet shards + manifest) to a HF dataset repo.
+    """Upload a tile directory to a HF dataset repo and return the dataset URL.
 
-    path_in_repo places the tiles in a subfolder of the same repo (e.g. worldpop_ts).
-    token defaults to the cached login or HF_TOKEN environment variable.
-    Returns the dataset URL.
+    delete_patterns drops remote files under path_in_repo that this upload does not
+    replace, so a rebuild leaves no tile from the previous release behind.
     """
     if not (tiles_dir / "manifest.json").exists():
         raise FileNotFoundError(f"no manifest.json in {tiles_dir}; run the aggregation first")
@@ -28,6 +26,7 @@ def publish_tiles(
         path_in_repo=path_in_repo,
         repo_id=repo_id,
         repo_type="dataset",
+        delete_patterns=delete_patterns,
         commit_message=f"Update {path_in_repo or 'completeness'} tiles",
     )
     return f"https://huggingface.co/datasets/{repo_id}"

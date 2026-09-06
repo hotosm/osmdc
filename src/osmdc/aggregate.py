@@ -1,7 +1,5 @@
 """Aggregate Overture buildings and roads into per-H3-cell completeness metrics."""
 
-from __future__ import annotations
-
 import json
 import os
 import shutil
@@ -32,8 +30,7 @@ def connect(
 ) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection with the spatial, h3 and httpfs extensions loaded.
 
-    threads, memory_limit and temp_dir cap resource use so a long run can share a
-    machine with other workloads. memory_limit is a DuckDB size string, e.g. "16GB".
+    memory_limit is a DuckDB size string, e.g. "16GB".
     """
     con = duckdb.connect()
     for extension in ("spatial", "httpfs"):
@@ -130,10 +127,7 @@ def aggregate_tile(
     segments_path: str = config.SEGMENTS_PATH,
     overture_release: str = config.OVERTURE_RELEASE,
 ) -> int:
-    """Write per-cell metrics for one bbox as parquet sharded by coarse H3 parent.
-
-    Returns the number of cells written.
-    """
+    """Write per-cell metrics for one bbox, sharded by coarse H3 parent. Returns the cells."""
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -228,25 +222,15 @@ def merge_chunks(
     population_sources: dict[str, str] | None = None,
     overture_release: str = config.OVERTURE_RELEASE,
 ) -> int:
-    """Sum partial cells across all chunks into browser tiles, joining each population.
+    """Sum chunk cells into tiles, adding population_<name> and gap_score_<name> per source.
 
-    Every named population source contributes population_<name> and gap_score_<name>
-    columns. The cell set is the union of chunk cells and every source's cells, so
-    people living where no building is mapped still appear. gap_score weights a
-    source's population by how incomplete the buildings are.
+    Cells are the union of chunk and population cells, so people living where nothing
+    is mapped still appear, weighted by how incomplete the buildings are.
     """
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     population_sources = population_sources or {}
-    chunk_columns = {
-        row[0]
-        for row in con.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{chunk_dir}/chunk_*.parquet')"
-        ).fetchall()
-    }
-    # Treat road_osm as zero when the chunks do not carry that column.
-    road_osm_agg = "sum(road_osm)" if "road_osm" in chunk_columns else "0"
     completeness = "coalesce(c.bld_osm * 1.0 / nullif(c.bld_count, 0), 0)"
 
     pop_ctes, key_unions, pop_selects, pop_joins = [], ["SELECT h3 FROM chunk_cells"], [], []
@@ -267,7 +251,7 @@ def merge_chunks(
                    sum(bld_count) AS bld_count,
                    sum(bld_osm) AS bld_osm,
                    sum(road_count) AS road_count,
-                   {road_osm_agg} AS road_osm,
+                   sum(road_osm) AS road_osm,
                    sum(CASE WHEN isfinite(road_len_m) THEN road_len_m ELSE 0 END) AS road_len_m
             FROM read_parquet('{chunk_dir}/chunk_*.parquet')
             GROUP BY h3
@@ -302,7 +286,7 @@ def merge_chunks(
         f"COPY merged_cells TO '{out_dir}' "
         "(FORMAT PARQUET, PARTITION_BY (h3_parent), COMPRESSION zstd)"
     )
-    _compact_partitions(con, out_dir)
+    compact_partitions(con, out_dir)
     populations = [
         {"name": name, **config.POPULATION_SOURCES.get(name, {"label": name})}
         for name in population_sources
@@ -313,15 +297,14 @@ def merge_chunks(
     return count_row[0]
 
 
-def _compact_partitions(con: duckdb.DuckDBPyConnection, out_dir: Path) -> None:
+def compact_partitions(con: duckdb.DuckDBPyConnection, out_dir: Path) -> None:
     """Collapse each partition's parallel-write shards into one tile file per parent."""
     for partition in sorted(out_dir.glob("h3_parent=*")):
         shards = list(partition.glob("*.parquet"))
         if len(shards) <= 1:
             continue
         compacted = out_dir / f"{partition.name}.compact.parquet"
-        # hive_partitioning=0 keeps compacted files from re-adding the h3_parent
-        # column, so every tile carries the same schema as the single-shard tiles.
+        # hive_partitioning=0 stops the compacted file re-adding the h3_parent column.
         con.execute(
             f"COPY (SELECT * FROM read_parquet('{partition}/*.parquet', hive_partitioning=0)) "
             f"TO '{compacted}' (FORMAT PARQUET, COMPRESSION zstd)"
@@ -350,12 +333,12 @@ def run_global(
 ) -> int:
     """Aggregate a lon/lat range chunk by chunk, then merge into browser tiles.
 
-    Each chunk is written atomically; a present chunk file means done, so a rerun
-    resumes where it stopped. Network errors on a chunk are logged and retried on
-    the next run rather than aborting the whole job.
+    A present chunk file means done, so a rerun resumes where it stopped. Chunks that
+    fail leave the merge unrun, because tiles from a partial planet look complete.
     """
     chunk_dir.mkdir(parents=True, exist_ok=True)
     chunks = iter_chunks(lon_min, lon_max, lat_min, lat_max, lon_step, lat_step)
+    failed = []
     for index, bbox in enumerate(chunks):
         target = chunk_dir / f"chunk_{index:04d}.parquet"
         label = f"[{index + 1}/{len(chunks)}] {bbox}"
@@ -369,12 +352,18 @@ def run_global(
         try:
             con.execute(f"COPY ({query}) TO '{temp}' (FORMAT PARQUET, COMPRESSION zstd)")
         except duckdb.IOException as error:
-            print(f"{label} network error, will retry on resume: {error}", flush=True)
+            failed.append(index)
+            print(f"{label} network error: {error}", flush=True)
             continue
         os.replace(temp, target)
         cells = con.execute(f"SELECT count(*) FROM read_parquet('{target}')").fetchone()
         assert cells is not None
         print(f"{label} -> {cells[0]} cells", flush=True)
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} of {len(chunks)} chunks failed and were not merged; "
+            "rerun to resume, the chunks that succeeded are on disk"
+        )
     total = merge_chunks(
         con,
         chunk_dir,

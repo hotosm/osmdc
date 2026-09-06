@@ -1,14 +1,13 @@
 set shell := ["bash", "-cu"]
 
-# Install dependencies
+# Install dependencies and the pre-commit hooks
 setup:
     uv sync
+    uv run pre-commit install
 
-# Lint, format-check and type-check
+# Lint, format and type-check every file
 lint:
-    uv run ruff check .
-    uv run ruff format --check .
-    uv run ty check
+    uv run pre-commit run --all-files
 
 # Run tests
 test:

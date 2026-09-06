@@ -4,7 +4,3 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
-
-# Tiles are downloaded from Hugging Face at deploy time, not committed.
-web/tiles/
-web/data/

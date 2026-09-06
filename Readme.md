@@ -15,9 +15,45 @@ straight from a Hugging Face dataset with DuckDB-WASM, so there is no backend.
 ## Develop
 
 ```
-just setup    # install dependencies
-just serve    # run the app at http://localhost:8000
-just test     # run tests
+just setup
+just serve
+just test
 ```
+
+`just serve` runs the app at http://localhost:8000.
+
+## Updating the data
+
+WorldPop Global 2 publishes an annual release covering the years 2015 to 2030. The
+`Refresh WorldPop tiles` workflow runs on the first of each month and compares the
+release and years offered by the [WorldPop STAC API](https://api.stac.worldpop.org) with
+the `worldpop_ts/manifest.json` already published in the dataset. When they match it
+stops there, which takes about fifteen seconds. When they differ, it works through the
+years one at a time, downloading each year's 1km constrained, UN-adjusted country
+rasters, binning them into H3 cells and deleting the rasters, then pivots the years into
+tiles and uploads them. A full rebuild takes about ninety minutes and peaks around 8 GB
+of memory. The published manifest records the release, the years, the cell count and the
+build time; the app reads the release and the years to label what it is showing.
+
+The workflow needs an `HF_TOKEN` repository secret with write access to the dataset.
+
+It tracks one version of each release. If WorldPop revises a release in place, the sweep
+finds no rasters it recognises and the run stops instead of publishing part of the world.
+Picking up a revision is then a deliberate change to the pattern in `refresh.ASSET_ID`.
+
+The same three steps run by hand:
+
+```
+uv run osmdc-refresh plan --repo user/dataset --out plan.json
+uv run osmdc-refresh worldpop-year --plan plan.json --year 2025 --out-dir cells
+uv run osmdc-refresh worldpop-publish --plan plan.json --scratch-dir cells --tiles tiles --repo user/dataset
+```
+
+Omit `--repo` from the last command to build the tiles without uploading them.
+
+Overture is not on a schedule. A planet rebuild scans about 350 GB and takes several
+hours, so it is run with `osmdc-planet` on a machine of your choosing. The Overture
+bucket keeps only the two most recent releases, so a pinned release id stops resolving
+after two months.
 
 Built with ❤️ by [kshitij](https://github.com/sponsors/kshitijrajsharma).

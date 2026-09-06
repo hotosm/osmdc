@@ -1,15 +1,19 @@
-"""Command line entrypoint for the aggregation pipeline."""
-
-from __future__ import annotations
-
 import argparse
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from osmdc import config
+from osmdc import config, refresh
 from osmdc.aggregate import BoundingBox, aggregate_tile, connect, merge_chunks, run_global
 from osmdc.population import kontur_to_parquet
 from osmdc.publish import publish_tiles
-from osmdc.worldpop import worldpop_timeseries_tiles, worldpop_to_parquet
+from osmdc.worldpop import (
+    pivot_years,
+    worldpop_timeseries_tiles,
+    worldpop_to_parquet,
+    worldpop_year_parquet,
+    write_ts_manifest,
+)
 
 
 def _add_throttle_args(parser: argparse.ArgumentParser) -> None:
@@ -155,6 +159,80 @@ def worldpop_ts_main() -> None:
     years = list(range(args.year_min, args.year_max + 1))
     present, cells = worldpop_timeseries_tiles(con, args.tif_dir, args.out, args.scratch_dir, years)
     print(f"wrote {cells} cells for years {present[0]}-{present[-1]} to {args.out}")
+
+
+def _refresh_plan(args: argparse.Namespace) -> None:
+    with refresh.client() as http:
+        plan = refresh.build_plan(http, args.repo, args.token)
+    payload = refresh.plan_json(plan)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(payload, indent=2))
+    summary = {key: payload[key] for key in ("release", "years", "needs_update")}
+    print(json.dumps(summary))
+
+
+def _refresh_year(args: argparse.Namespace) -> None:
+    plan = refresh.read_plan(args.plan)
+    con = connect(args.threads, args.memory_limit, args.temp_dir)
+    out_path = args.out_dir / f"ts_{args.year}.parquet"
+    with refresh.client() as http, TemporaryDirectory() as rasters:
+        rasters_read = refresh.download_year(http, plan.catalog, args.year, Path(rasters))
+        cells = worldpop_year_parquet(con, rasters, out_path, args.year)
+    print(f"{args.year}: {rasters_read} rasters -> {cells} cells in {out_path}")
+
+
+def _refresh_publish(args: argparse.Namespace) -> None:
+    plan = refresh.read_plan(args.plan)
+    con = connect(args.threads, args.memory_limit, args.temp_dir)
+    years = plan.catalog.years
+    cells = pivot_years(con, args.scratch_dir, args.tiles, years)
+    write_ts_manifest(args.tiles, years, cells, plan.catalog.release)
+    print(f"built {cells} cells for {years[0]}-{years[-1]}, release {plan.catalog.release}")
+    if args.repo:
+        url = publish_tiles(
+            args.tiles,
+            args.repo,
+            args.token,
+            path_in_repo=config.WORLDPOP_TS_PATH,
+            delete_patterns=["**"],
+        )
+        refresh.verify_published(args.tiles, args.repo, args.token)
+        print(f"published to {url}")
+
+
+def build_refresh_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="osmdc-refresh", description="Keep the published WorldPop tiles current"
+    )
+    commands = parser.add_subparsers(required=True)
+
+    plan = commands.add_parser("plan", help="compare the WorldPop catalogue with what is published")
+    plan.add_argument("--repo", required=True, help="HF dataset id, e.g. user/name")
+    plan.add_argument("--token", default=None, help="HF token (defaults to cached login)")
+    plan.add_argument("--out", type=Path, required=True, help="plan JSON path")
+    plan.set_defaults(run=_refresh_plan)
+
+    year = commands.add_parser("worldpop-year", help="download and bin one year of rasters")
+    year.add_argument("--plan", type=Path, required=True, help="plan JSON from the plan command")
+    year.add_argument("--year", type=int, required=True)
+    year.add_argument("--out-dir", type=Path, required=True, help="per-year cell parquet directory")
+    _add_throttle_args(year)
+    year.set_defaults(run=_refresh_year)
+
+    publish = commands.add_parser("worldpop-publish", help="pivot the years into tiles and upload")
+    publish.add_argument("--plan", type=Path, required=True)
+    publish.add_argument("--scratch-dir", type=Path, required=True, help="per-year cell parquet")
+    publish.add_argument("--tiles", type=Path, required=True, help="output tile directory")
+    publish.add_argument("--repo", default=None, help="HF dataset id; omit to build without upload")
+    publish.add_argument("--token", default=None, help="HF token (defaults to cached login)")
+    _add_throttle_args(publish)
+    publish.set_defaults(run=_refresh_publish)
+    return parser
+
+
+def refresh_main() -> None:
+    args = build_refresh_parser().parse_args()
+    args.run(args)
 
 
 def planet_main() -> None:

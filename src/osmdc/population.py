@@ -1,11 +1,7 @@
-"""Aggregate the Kontur Population dataset into a per-H3-cell parquet.
+"""Aggregate the Kontur Population GeoPackage, already an H3 resolution 8 grid, into parquet.
 
-Kontur Population is already an H3 resolution 8 grid, the same grid this pipeline uses,
-so each cell joins directly with no resampling. Download the GeoPackage first from
-config.KONTUR_POPULATION_URL (a gzipped .gpkg) and decompress it.
+Download and decompress it from config.KONTUR_POPULATION_URL first.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 
@@ -15,10 +11,7 @@ import duckdb
 def kontur_to_parquet(
     con: duckdb.DuckDBPyConnection, gpkg_path: str, out_path: Path
 ) -> tuple[int, float]:
-    """Read the Kontur GeoPackage and write an (h3, population) parquet.
-
-    Returns (cell_count, total_population).
-    """
+    """Write an (h3, population) parquet from the Kontur GeoPackage. Returns (cells, total)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     con.execute(f"""
         COPY (
